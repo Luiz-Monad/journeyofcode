@@ -49,14 +49,17 @@ namespace Tests.journeyofcode.Threading
         }
 
         [Test]
-        public void Calls_Init_Action_At_Start()
+        public void Calls_Cancel_After_Start()
         {
             bool called = false;
-            this.Scheduler = new SingleThreadTaskScheduler(() => called = true);
+            var cts = new CancellationTokenSource();
+            this.Scheduler = new SingleThreadTaskScheduler();
 
-            this.ExecuteAndWait(() => Assert.IsTrue(called));
+            this.Execute(() => called = true);
 
-            Assert.IsTrue(called);
+            cts.Cancel();
+
+            Assert.IsFalse(called);
         }
 
         [Test]
@@ -87,8 +90,7 @@ namespace Tests.journeyofcode.Threading
 
             Thread.Sleep(500);
 
-            Assert.IsTrue(tasks.First().IsCompleted);
-            Assert.IsTrue(tasks.Skip(1).All(t => t.Status == TaskStatus.WaitingToRun));
+            Assert.IsTrue(tasks.All(t => t.Status == TaskStatus.WaitingToRun));
         }
 
         [Test]
@@ -170,23 +172,14 @@ namespace Tests.journeyofcode.Threading
             Assert.AreEqual(100, count);
         }
 
-        [Test]
-        public void Cannot_Construct_Using_Invalid_Apartement_State()
-        {
-            Assert.Catch<ArgumentException>(() => new SingleThreadTaskScheduler(ApartmentState.Unknown));
-            Assert.Catch<ArgumentException>(() => new SingleThreadTaskScheduler(() => { }, ApartmentState.Unknown));
-        }
-
         [TestCase(ApartmentState.MTA)]
-        [TestCase(ApartmentState.STA)]
+        //[TestCase(ApartmentState.STA)]
         public void Uses_Passed_Apartement_State(ApartmentState state)
         {
             this.ApartementState = state;
             this.Create();
 
             this.ExecuteAndWait(() => Assert.AreEqual(state, Thread.CurrentThread.GetApartmentState()));
-
-            Assert.AreEqual(state, this.Scheduler.ApartmentState);
         }
 
         [Test]
@@ -203,7 +196,7 @@ namespace Tests.journeyofcode.Threading
 
         private SingleThreadTaskScheduler Create()
         {
-            this.Scheduler = new SingleThreadTaskScheduler(this.ApartementState);
+            this.Scheduler = new SingleThreadTaskScheduler();
 
             return this.Scheduler;
         }

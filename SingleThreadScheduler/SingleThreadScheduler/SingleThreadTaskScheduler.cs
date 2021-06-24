@@ -18,12 +18,7 @@ namespace journeyofcode.Threading
         private readonly Thread _thread;
         private readonly CancellationTokenSource _cancellationToken;
         private readonly BlockingCollection<Task> _tasks;
-        private readonly Action _initAction;
-        
-        /// <summary>
-        ///     The <see cref="System.Threading.ApartmentState"/> of the <see cref="Thread"/> this <see cref="SingleThreadTaskScheduler"/> uses to execute its work.
-        /// </summary>
-        public ApartmentState ApartmentState { get; private set; }
+        private bool _done = false;
 
         /// <summary>
         ///     Indicates the maximum concurrency level this <see cref="T:System.Threading.Tasks.TaskScheduler"/> is able to support.
@@ -38,42 +33,25 @@ namespace journeyofcode.Threading
         }
 
         /// <summary>
-        ///     Initializes a new instance of the <see cref="SingleThreadTaskScheduler"/>, optionally setting an <see cref="System.Threading.ApartmentState"/>.
+        ///     Initializes a new instance of the <see cref="SingleThreadTaskScheduler"/>.
         /// </summary>
-        /// <param name="apartmentState">
-        ///     The <see cref="ApartmentState"/> to use. Defaults to <see cref="System.Threading.ApartmentState.STA"/>
-        /// </param>
-        public SingleThreadTaskScheduler(ApartmentState apartmentState = ApartmentState.STA)
-            : this(null, apartmentState)
+        public SingleThreadTaskScheduler()
+            : this(new CancellationTokenSource())
         {
-            
         }
 
         /// <summary>
-        ///     Initializes a new instance of the <see cref="SingleThreadTaskScheduler"/> passsing an initialization action, optionally setting an <see cref="System.Threading.ApartmentState"/>.
+        ///     Initializes a new instance of the <see cref="SingleThreadTaskScheduler"/> passing a cancelation token.
         /// </summary>
-        /// <param name="initAction">
-        ///     An <see cref="Action"/> to perform in the context of the <see cref="Thread"/> this <see cref="SingleThreadTaskScheduler"/> uses to execute its work after it has been started.
+        /// <param name="cancellationToken">
+        ///     An <see cref="CancellationTokenSource"/> used to cancel all tasks runing in this <see cref="SingleThreadTaskScheduler"/>.
         /// </param>
-        /// <param name="apartmentState">
-        ///     The <see cref="ApartmentState"/> to use. Defaults to <see cref="System.Threading.ApartmentState.STA"/>
-        /// </param>
-        public SingleThreadTaskScheduler(Action initAction, ApartmentState apartmentState = ApartmentState.STA)
+        public SingleThreadTaskScheduler(CancellationTokenSource cancellationToken)
         {
-            if (apartmentState != ApartmentState.MTA && apartmentState != ApartmentState.STA)
-                throw new ArgumentException("apartementState");
-
-            this.ApartmentState = apartmentState;
-            this._cancellationToken = new CancellationTokenSource();
+            this._cancellationToken = cancellationToken;
             this._tasks = new BlockingCollection<Task>();
-            this._initAction = initAction ?? (() => { });
-
-            this._thread = new Thread(this.ThreadStart);
-            this._thread.IsBackground = true;
-            this._thread.TrySetApartmentState(apartmentState);
-            this._thread.Start();
+            this._thread = Thread.CurrentThread;
         }
-
 
         /// <summary>
         ///     Waits until all scheduled <see cref="Task"/>s on this <see cref="SingleThreadTaskScheduler"/> have executed and then disposes this <see cref="SingleThreadTaskScheduler"/>.
@@ -86,13 +64,10 @@ namespace journeyofcode.Threading
         /// </exception>
         public void Wait()
         {
-            if (this._cancellationToken.IsCancellationRequested)
-                throw new TaskSchedulerException("Cannot wait after disposal.");
+            this.VerifyNotCancelled();
 
             this._tasks.CompleteAdding();
-            this._thread.Join();
-
-            this._cancellationToken.Cancel();
+            this.ThreadStart();
         }
 
         /// <summary>
@@ -103,23 +78,20 @@ namespace journeyofcode.Threading
         /// </remarks>
         public void Dispose()
         {
-            if (this._cancellationToken.IsCancellationRequested)
-                return;
-
             this._tasks.CompleteAdding();
-            this._cancellationToken.Cancel();
+            this.ThreadCancel();
         }
 
         protected override void QueueTask(Task task)
         {
-            this.VerifyNotDisposed();
+            this.VerifyNotCancelled();
 
             this._tasks.Add(task, this._cancellationToken.Token);
         }
 
         protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued)
         {
-            this.VerifyNotDisposed();
+            this.VerifyNotCancelled();
 
             if (this._thread != Thread.CurrentThread)
                 return false;
@@ -132,32 +104,34 @@ namespace journeyofcode.Threading
 
         protected override IEnumerable<Task> GetScheduledTasks()
         {
-            this.VerifyNotDisposed();
+            this.VerifyNotCancelled();
 
             return this._tasks.ToArray();
         }
 
         private void ThreadStart()
         {
-            try
+            foreach (var task in this._tasks.GetConsumingEnumerable())
             {
-                var token = this._cancellationToken.Token;
-
-                this._initAction();
-
-                foreach (var task in this._tasks.GetConsumingEnumerable(token))
-                    this.TryExecuteTask(task);
+                if (this._cancellationToken.Token.IsCancellationRequested)
+                    return;
+                this.TryExecuteTask(task);
             }
-            finally
-            {
-                this._tasks.Dispose();
-            }
+            _done = true;
         }
 
-        private void VerifyNotDisposed()
+        private void ThreadCancel()
         {
-            if (this._cancellationToken.IsCancellationRequested)
-                throw new ObjectDisposedException(typeof(SingleThreadTaskScheduler).Name);
+            foreach (var task in this._tasks.GetConsumingEnumerable())
+            {
+            }
+            _done = true;
+        }
+
+        private void VerifyNotCancelled()
+        {
+            if (this._cancellationToken.IsCancellationRequested || _done)
+                throw new TaskSchedulerException("Operation invalid after being cancelled.");
         }
     }
 }
